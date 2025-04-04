@@ -3,36 +3,25 @@ import bmesh
 import mathutils
 import math
 
-
+# Reset scene
 bpy.ops.wm.read_factory_settings(use_empty=True)
 
-# Set to millimeters
+# Set units to millimeters
 scene = bpy.context.scene
 scene.unit_settings.system = 'METRIC'
 scene.unit_settings.scale_length = 0.001
 scene.unit_settings.use_separate = True
 scene.unit_settings.length_unit = 'MILLIMETERS'
 
+# Dimensions in mm
+leg1 = 216
+leg2 = 88
+height = 10
+frame_thickness_ab = 9
+frame_thickness_bc = 9
+frame_thickness_ca = 18
 
-# Safely set grid scale in all 3D View areas (if in UI context)
-for window in bpy.context.window_manager.windows:
-    for area in window.screen.areas:
-        if area.type == 'VIEW_3D':
-            for space in area.spaces:
-                if space.type == 'VIEW_3D':
-                    space.overlay.grid_scale = 0.001
-
-
-# ------------------------------
-# Dimensions in mm (converted to meters)
-# ------------------------------
-leg1 = 216    # mm
-leg2 = 88     # mm
-height = 10   # mm
-
-# ------------------------------
-# Create a triangular prism
-# ------------------------------
+# Create triangle prism
 mesh = bpy.data.meshes.new("TrianglePrismMesh")
 obj = bpy.data.objects.new("TrianglePrism", mesh)
 bpy.context.collection.objects.link(obj)
@@ -40,268 +29,165 @@ bpy.context.view_layer.objects.active = obj
 obj.select_set(True)
 
 bm = bmesh.new()
-
-# Bottom triangle (XY plane)
 v1 = bm.verts.new((0, 0, 0))
 v2 = bm.verts.new((leg1, 0, 0))
 v3 = bm.verts.new((0, leg2, 0))
-
-# Top triangle (shifted in Z)
 v4 = bm.verts.new((0, 0, height))
 v5 = bm.verts.new((leg1, 0, height))
 v6 = bm.verts.new((0, leg2, height))
 
-# Create prism faces
-bm.faces.new((v1, v2, v3))        # bottom
-bm.faces.new((v6, v5, v4))        # top
-bm.faces.new((v1, v2, v5, v4))    # side 1
-bm.faces.new((v2, v3, v6, v5))    # side 2
-bm.faces.new((v3, v1, v4, v6))    # side 3
+bm.faces.new((v1, v2, v3))
+bm.faces.new((v6, v5, v4))
+bm.faces.new((v1, v2, v5, v4))
+bm.faces.new((v2, v3, v6, v5))
+bm.faces.new((v3, v1, v4, v6))
 
 bm.to_mesh(mesh)
 bm.free()
 
+frame = obj
 
+# Create inner triangle prism with custom thickness per side
+def create_inset_triangle_prism(thickness_ab, thickness_bc, thickness_ca, height):
+    mesh = bpy.data.meshes.new("InsetPrismMesh")
+    obj = bpy.data.objects.new("InsetPrism", mesh)
+    bpy.context.collection.objects.link(obj)
 
+    A = mathutils.Vector((0, 0))
+    B = mathutils.Vector((leg1, 0))
+    C = mathutils.Vector((0, leg2))
 
+    def offset(p1, p2, d):
+        edge = (p2 - p1).normalized()
+        normal = mathutils.Vector((-edge.y, edge.x))
+        return p1 + normal * d, p2 + normal * d
 
+    ab1, ab2 = offset(A, B, thickness_ab)
+    bc1, bc2 = offset(B, C, thickness_bc)
+    ca1, ca2 = offset(C, A, thickness_ca)
 
-# Assume 'obj' is your original object
-original = bpy.data.objects["TrianglePrism"]  # or use a variable reference
+    def intersect(p1, p2, p3, p4):
+        a1 = p2 - p1
+        a2 = p4 - p3
+        b = p3 - p1
+        denom = a1.cross(a2)
+        if abs(denom) < 1e-6:
+            return p1
+        t = b.cross(a2) / denom
+        return p1 + a1 * t
 
-# Create a full duplicate (object + mesh data)
-duplicate = original.copy()
-duplicate.data = original.data.copy()  # Important: duplicate the mesh too
-bpy.context.collection.objects.link(duplicate)  # Add to the scene
+    i1 = intersect(ab1, ab2, ca2, ca1)
+    i2 = intersect(ab2, ab1, bc1, bc2)
+    i3 = intersect(ca1, ca2, bc2, bc1)
 
-# Scale the copy uniformly by 0.8
-scale_factor =  60 / 88
-duplicate.scale = (scale_factor, scale_factor, 2.)
-# delta = (A - A') / cos(alpha) + 1 + tg(alpha)
-hypotenuse = (leg1**2 + leg2**2)**0.5 # hypotenuse
-delta = (leg2 - leg2*scale_factor) / (1+ leg1/hypotenuse + leg2/leg1)
+    bm = bmesh.new()
+    v1 = bm.verts.new((i1.x, i1.y, 0))
+    v2 = bm.verts.new((i2.x, i2.y, 0))
+    v3 = bm.verts.new((i3.x, i3.y, 0))
+    v4 = bm.verts.new((i1.x, i1.y, height))
+    v5 = bm.verts.new((i2.x, i2.y, height))
+    v6 = bm.verts.new((i3.x, i3.y, height))
 
-duplicate.location += mathutils.Vector((delta, delta, -5.))  # Shift 50 mm on X
-# duplicate.scale = (1, 1, 2)
+    bm.faces.new((v1, v2, v3))
+    bm.faces.new((v6, v5, v4))
+    bm.faces.new((v1, v2, v5, v4))
+    bm.faces.new((v2, v3, v6, v5))
+    bm.faces.new((v3, v1, v4, v6))
 
+    bm.to_mesh(mesh)
+    bm.free()
+    return obj
 
-# ------------------------------
-# Boolean subtraction (GUI-safe)
-# ------------------------------
-bpy.context.view_layer.objects.active = original
-original.select_set(True)
+inner_prism = create_inset_triangle_prism(frame_thickness_ab, frame_thickness_bc, frame_thickness_ca, height)
 
-bool_mod = original.modifiers.new(name="SubtractInner", type='BOOLEAN')
-bool_mod.operation = 'DIFFERENCE'
-bool_mod.object = duplicate
+# Subtract inner prism from frame
+def apply_modifier_background(obj, modifier_name):
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    mod = obj.modifiers.get(modifier_name)
+    if mod:
+        obj_eval = obj.evaluated_get(depsgraph)
+        new_mesh = bpy.data.meshes.new_from_object(obj_eval)
+        obj.modifiers.remove(mod)
+        obj.data = new_mesh
 
-# Apply the modifier (requires object mode + GUI context)
-if bpy.ops.object.mode_set.poll():
-    bpy.ops.object.mode_set(mode='OBJECT')
-bpy.ops.object.modifier_apply(modifier=bool_mod.name)
+mod = frame.modifiers.new(name="SubtractInner", type='BOOLEAN')
+mod.operation = 'DIFFERENCE'
+mod.object = inner_prism
+apply_modifier_background(frame, "SubtractInner")
+bpy.data.objects.remove(inner_prism, do_unlink=True)
 
-# Optional: remove the small object after cutout
-# bpy.data.objects.remove(duplicate, do_unlink=True)
-
-
-frame = original
-
-
-
-
-
-
-# ------------------------------
-# Create cutting cube to trim the sharp corner
-# ------------------------------
-
-cut_size = 80  # mm (adjust for how much to cut off)
-cut_height = 20  # mm (taller than the prism to ensure full cut)
-
-# Create a cube that intersects the right-angle corner (0,0)
+# Corner cut cube
+cut_size = 80
+cut_height = 20
 bpy.ops.mesh.primitive_cube_add(size=1)
-cut_cube = bpy.context.active_object
+cut_cube = bpy.context.selected_objects[0]
 cut_cube.name = "CornerCutter"
-
-# Scale the cube to desired cut size
 cut_cube.scale = (cut_size, cut_size, cut_height)
+cut_cube.location = (leg1, 0, height / 2)
 
-# Position it to trim the triangle tip
-# Slightly shift it along X and Y to overlap the corner
-prism_height = height
-cut_cube.location = (leg1, 0, prism_height / 2)
-
-# ------------------------------
-# Boolean subtract: cut the corner
-# ------------------------------
-
-# Make the triangle prism active again
-bpy.context.view_layer.objects.active = obj
-obj.select_set(True)
-
-# Add and apply Boolean modifier
-corner_mod = obj.modifiers.new(name="CutCorner", type='BOOLEAN')
-corner_mod.operation = 'DIFFERENCE'
-corner_mod.object = cut_cube
-
-# Ensure Object mode and apply modifier
-if bpy.ops.object.mode_set.poll():
-    bpy.ops.object.mode_set(mode='OBJECT')
-bpy.ops.object.modifier_apply(modifier=corner_mod.name)
-
-# Optional: remove the cutter cube
+mod = frame.modifiers.new(name="CutCorner", type='BOOLEAN')
+mod.operation = 'DIFFERENCE'
+mod.object = cut_cube
+apply_modifier_background(frame, "CutCorner")
 bpy.data.objects.remove(cut_cube, do_unlink=True)
 
+# Create bow groove
+outer_radius = 300
+inner_radius = 295
+arc_angle_deg = 10
+arc_angle_rad = math.radians(arc_angle_deg)
+depth = height * 1.2
+bow_center_x = outer_radius + 2.5
+bow_center_y = leg2 / 2
+bow_center_z = height / 2
 
-
-# ------------------------------
-# Parameters for the bow groove
-# ------------------------------
-outer_radius = 300  # mm
-inner_radius = 295  # mm
-depth = prism_height * 1.2  # how deep to cut into the prism
-bow_center_x = outer_radius + 2.5      # center along X (long side)
-bow_center_y = leg2/2     # center along Y (short side)
-bow_center_z = prism_height / 2  # mid-height of triangle
-print(bow_center_x, bow_center_y, bow_center_z)
-# ------------------------------
-# Outer cylinder (for the groove)
-# ------------------------------
-bpy.ops.mesh.primitive_cylinder_add(
-    vertices=128,
-    radius=outer_radius,
-    depth=depth,
-    location=(bow_center_x, bow_center_y, bow_center_z),
-    rotation=(0, 0, 0)  # Z-axis cylinder = default
-)
-outer_cyl = bpy.context.active_object
+# Create outer arc mesh
+bpy.ops.mesh.primitive_cylinder_add(vertices=128, radius=outer_radius, depth=depth,
+    location=(bow_center_x, bow_center_y, bow_center_z))
+outer_cyl = bpy.context.selected_objects[0]
 outer_cyl.name = "BowOuter"
 
-# ------------------------------
-# Inner cylinder (to hollow the groove)
-# ------------------------------
-bpy.ops.mesh.primitive_cylinder_add(
-    radius=inner_radius,
-    vertices=128,
-    depth=depth * 1.2,
-    location=(bow_center_x, bow_center_y, bow_center_z),
-    rotation=(0, 0, 0)
-)
-inner_cyl = bpy.context.active_object
+# Trim cylinder to arc shape
+bpy.ops.mesh.primitive_cube_add(size=1)
+arc_cutter = bpy.context.selected_objects[0]
+arc_cutter.name = "ArcCutter"
+arc_cutter.scale = (outer_radius * 2, outer_radius * 2, depth * 2)
+arc_cutter.location = (bow_center_x - outer_radius * math.cos(arc_angle_rad / 2), bow_center_y, bow_center_z)
+arc_cutter.rotation_euler[2] = arc_angle_rad / 2
+
+mod = outer_cyl.modifiers.new(name="ArcTrim", type='BOOLEAN')
+mod.operation = 'INTERSECT'
+mod.object = arc_cutter
+apply_modifier_background(outer_cyl, "ArcTrim")
+bpy.data.objects.remove(arc_cutter, do_unlink=True)
+
+# Inner cylinder for hollowing
+bpy.ops.mesh.primitive_cylinder_add(vertices=128, radius=inner_radius, depth=depth * 1.2,
+    location=(bow_center_x, bow_center_y, bow_center_z))
+inner_cyl = bpy.context.selected_objects[0]
 inner_cyl.name = "BowInner"
 
-# ------------------------------
-# Subtract inner from outer to make ring segment
-# ------------------------------
-bpy.context.view_layer.objects.active = outer_cyl
-outer_cyl.select_set(True)
-
-mod_hollow = outer_cyl.modifiers.new(name="HollowBow", type='BOOLEAN')
-mod_hollow.operation = 'DIFFERENCE'
-mod_hollow.object = inner_cyl
-
-if bpy.ops.object.mode_set.poll():
-    bpy.ops.object.mode_set(mode='OBJECT')
-bpy.ops.object.modifier_apply(modifier=mod_hollow.name)
+mod = outer_cyl.modifiers.new(name="HollowBow", type='BOOLEAN')
+mod.operation = 'DIFFERENCE'
+mod.object = inner_cyl
+apply_modifier_background(outer_cyl, "HollowBow")
 bpy.data.objects.remove(inner_cyl, do_unlink=True)
+sector = outer_cyl.copy()
+sector.data = outer_cyl.data.copy()
+bpy.context.collection.objects.link(sector)
 
-
-
-
-duplicate.scale = (1.01, 1.01, 2)
-# duplicate.location = (1/scale_factor, 1/scale_factor, 1)
-duplicate.location += mathutils.Vector((-delta*6, 0, 0))  # Shift 50 mm on X
-
-
-# ------------------------------
-# Intersect bow with duplicate (keep only shared part)
-# ------------------------------
-
-# Make sure 'duplicate' is active and selected
-bpy.context.view_layer.objects.active = duplicate
-duplicate.select_set(True)
-
-# Ensure we are in Object Mode
-if bpy.ops.object.mode_set.poll():
-    bpy.ops.object.mode_set(mode='OBJECT')
-
-# Add Boolean INTERSECT modifier
-inter_mod = duplicate.modifiers.new(name="BowIntersect", type='BOOLEAN')
-inter_mod.operation = 'INTERSECT'
-inter_mod.object = outer_cyl
-
-# Apply the modifier
-bpy.ops.object.modifier_apply(modifier=inter_mod.name)
-
-# Optional: remove the bow object after intersection
+mod = sector.modifiers.new(name="BowIntersect", type='BOOLEAN')
+mod.operation = 'INTERSECT'
+mod.object = frame
+apply_modifier_background(sector, "BowIntersect")
 bpy.data.objects.remove(outer_cyl, do_unlink=True)
-sector = duplicate
 
-# ------------------------------
-# Subtract the bow sector from the frame
-# ------------------------------
-bpy.context.view_layer.objects.active = frame
-frame.select_set(True)
-
-mod_hollow = frame.modifiers.new(name="CutTheBow", type='BOOLEAN')
-mod_hollow.operation = 'DIFFERENCE'
-mod_hollow.object = sector
-
-if bpy.ops.object.mode_set.poll():
-    bpy.ops.object.mode_set(mode='OBJECT')
-bpy.ops.object.modifier_apply(modifier=mod_hollow.name)
+# Subtract sector from frame
+mod = frame.modifiers.new(name="CutTheBow", type='BOOLEAN')
+mod.operation = 'DIFFERENCE'
+mod.object = sector
+apply_modifier_background(frame, "CutTheBow")
 bpy.data.objects.remove(sector, do_unlink=True)
 
-
-
-
-
-
-
-
-# ------------------------------
-# Add camera and light
-# ------------------------------
-
-# Delete existing camera and lights if any
-for obj_ in bpy.data.objects:
-    if obj_.type in {'LIGHT', 'CAMERA'}:
-        bpy.data.objects.remove(obj_, do_unlink=True)
-
-# Add a new camera
-bpy.ops.object.camera_add(
-    location=(300, -400, 250),  # position in mm
-    rotation=(math.radians(65), 0, math.radians(45))  # slight tilt
-)
-cam = bpy.context.active_object
-cam.name = "AutoCamera"
-scene.camera = cam
-
-# Set camera focal length for a wider view
-cam.data.lens = 35  # mm
-
-# Add a soft point light
-bpy.ops.object.light_add(
-    type='AREA',
-    location=(200, -200, 300)
-)
-light = bpy.context.active_object
-light.name = "AutoLight"
-light.data.energy = 5000  # adjust brightness
-light.data.size = 100    # soft shadow area
-
-# Optional: Look at the object (center view)
-bpy.ops.object.empty_add(type='PLAIN_AXES', location=(leg1/2, leg2/2, height/2))
-focus_target = bpy.context.active_object
-
-# Add a "Track To" constraint to the camera
-track = cam.constraints.new(type='TRACK_TO')
-track.target = focus_target
-track.track_axis = 'TRACK_NEGATIVE_Z'
-track.up_axis = 'UP_Y'
-
-
-
-
-# bpy.ops.object.modifier_apply(modifier=bool_mod.name)
+# Save result
 bpy.ops.wm.save_as_mainfile(filepath="palecha3.blend")
