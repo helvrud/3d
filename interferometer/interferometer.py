@@ -14,12 +14,12 @@ scene.unit_settings.use_separate = True
 scene.unit_settings.length_unit = 'MILLIMETERS'
 
 # Dimensions in mm
-leg1 = 216
+leg1 = 280
 leg2 = 88
 height = 10
 frame_thickness_ab = 9
 frame_thickness_bc = 9
-frame_thickness_ca = 18
+frame_thickness_ca = 22
 
 # Create triangle prism
 mesh = bpy.data.meshes.new("TrianglePrismMesh")
@@ -46,6 +46,11 @@ bm.to_mesh(mesh)
 bm.free()
 
 frame = obj
+trim  = frame.copy()
+bpy.context.collection.objects.link(trim)
+trim.location += mathutils.Vector((-45, frame_thickness_ab, 0)) 
+
+
 
 # Create inner triangle prism with custom thickness per side
 def create_inset_triangle_prism(thickness_ab, thickness_bc, thickness_ca, height):
@@ -137,8 +142,8 @@ inner_radius = 295
 arc_angle_deg = 10
 arc_angle_rad = math.radians(arc_angle_deg)
 depth = height * 1.2
-bow_center_x = outer_radius + 2.5
-bow_center_y = leg2 / 2
+bow_center_x = outer_radius + 5
+bow_center_y = frame_thickness_ab 
 bow_center_z = height / 2
 
 # Create outer arc mesh
@@ -146,6 +151,10 @@ bpy.ops.mesh.primitive_cylinder_add(vertices=128, radius=outer_radius, depth=dep
     location=(bow_center_x, bow_center_y, bow_center_z))
 outer_cyl = bpy.context.selected_objects[0]
 outer_cyl.name = "BowOuter"
+inner_inner_cyl = outer_cyl.copy()
+inner_inner_radius = 290
+inner_inner_cyl.scale = (inner_inner_radius / outer_radius, inner_inner_radius / outer_radius, 1)
+
 
 # Trim cylinder to arc shape
 bpy.ops.mesh.primitive_cube_add(size=1)
@@ -171,16 +180,31 @@ mod = outer_cyl.modifiers.new(name="HollowBow", type='BOOLEAN')
 mod.operation = 'DIFFERENCE'
 mod.object = inner_cyl
 apply_modifier_background(outer_cyl, "HollowBow")
+
+
 bpy.data.objects.remove(inner_cyl, do_unlink=True)
+bpy.context.collection.objects.link(inner_inner_cyl)
+
+
 sector = outer_cyl.copy()
 sector.data = outer_cyl.data.copy()
 bpy.context.collection.objects.link(sector)
 
 mod = sector.modifiers.new(name="BowIntersect", type='BOOLEAN')
 mod.operation = 'INTERSECT'
-mod.object = frame
+mod.object = trim
 apply_modifier_background(sector, "BowIntersect")
 bpy.data.objects.remove(outer_cyl, do_unlink=True)
+# bpy.data.objects.remove(trim, do_unlink=True)
+
+
+mod = inner_inner_cyl.modifiers.new(name="InnerInnerCylIntersect", type='BOOLEAN')
+mod.operation = 'INTERSECT'
+mod.object = trim
+apply_modifier_background(sector, "InnerInnerCylIntersect")
+# bpy.data.objects.remove(trim, do_unlink=True)
+
+
 
 # Subtract sector from frame
 mod = frame.modifiers.new(name="CutTheBow", type='BOOLEAN')
@@ -189,5 +213,16 @@ mod.object = sector
 apply_modifier_background(frame, "CutTheBow")
 bpy.data.objects.remove(sector, do_unlink=True)
 
+
+
+# Subtract inner_inner_prism cylinder from prism
+mod = frame.modifiers.new(name="CutTheInnerCylinder", type='BOOLEAN')
+mod.operation = 'DIFFERENCE'
+mod.object = inner_inner_cyl
+apply_modifier_background(frame, "CutTheInnerCylinder")
+# bpy.data.objects.remove(inner_inner_cyl, do_unlink=True)
+
 # Save result
 bpy.ops.wm.save_as_mainfile(filepath="palecha3.blend")
+
+
